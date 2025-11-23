@@ -65,7 +65,6 @@ export default class Dende {
     private mode: DendeMode = "drawing";
     private delay: number = 33;
 
-    // CHANGED: Listener now expects the Interface
     private partListeners: Array<(p: IDendePart) => any> = [];
 
     private pointsBuffer: Array<number> = [];
@@ -112,7 +111,6 @@ export default class Dende {
         this.canvas.style.cursor = "crosshair";
     }
 
-    // CHANGED: Accepts Interface
     public addPartListener(cb: (p: IDendePart) => any) {
         this.partListeners.push(cb);
     }
@@ -226,7 +224,6 @@ export default class Dende {
     private flushBuffer(isEnding: boolean) {
         if (this.mode !== "drawing") return;
 
-        // We create a class instance here, but it matches the Interface perfectly
         const part = new DendePart();
         part.type = DendePartType.Drawing;
         part.isLineEnd = isEnding;
@@ -305,13 +302,10 @@ export default class Dende {
         this.saveSnapshot()
     }
 
-    // CHANGED: Accepts Interface
     emitPart(p: IDendePart) {
         this.partListeners.forEach(cb => cb(p));
     }
 
-    // --- NETWORK HANDLER ---
-    // CHANGED: Accepts Interface (Crucial for WebSocket data)
     public putPart(part: IDendePart) {
         if (this.canDraw) return;
 
@@ -342,18 +336,14 @@ export default class Dende {
                 if (!this.otherStartedDrawing) {
                     this.otherStartedDrawing = true;
                     this.ctx.beginPath();
-                    // Start at the first point
                     this.ctx.moveTo(part.coordinates[0]!, part.coordinates[1]!);
                     this.ctx.lineTo(part.coordinates[0]!, part.coordinates[1]!);
                     this.ctx.stroke();
 
-                    // Loop starts at 2 because 0 is handled by moveTo
                     for (let i = 2; i < part.coordinates.length; i += 2) {
                         this.ctx.lineTo(part.coordinates[i]!, part.coordinates[i + 1]!);
                     }
                 } else {
-                    // If continuing a line, simply connect to ALL new points
-                    // Loop starts at 0
                     for (let i = 0; i < part.coordinates.length; i += 2) {
                         this.ctx.lineTo(part.coordinates[i]!, part.coordinates[i + 1]!);
                     }
@@ -381,7 +371,6 @@ export default class Dende {
         }
     }
 
-    // CHANGED: Callback expects Interface
     onPartCreated(callback: (p: IDendePart) => any) {
         this.partListeners.push(callback);
     }
