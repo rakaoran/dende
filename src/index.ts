@@ -1,12 +1,19 @@
+export type DendeMode = "drawing" | "filling";
+export type RGBA = [number, number, number, number];
+
 export enum DendePartType {
     Drawing, Filling, Undo, Redo, Clear
 }
 
-export type DendeMode = "drawing" | "filling";
+export interface IDendePart {
+    type: DendePartType;
+    isLineEnd: boolean;
+    coordinates: Array<number>;
+    color: RGBA;
+    lineWidth: number;
+}
 
-export type RGBA = [number, number, number, number];
-
-class DendePart {
+export class DendePart implements IDendePart {
     type: DendePartType;
     isLineEnd: boolean;
     coordinates: Array<number>;
@@ -21,7 +28,7 @@ class DendePart {
         this.lineWidth = 2;
     }
 
-    static fillWithColorAtPoint(rgba: RGBA, x: number, y: number) {
+    static fillWithColorAtPoint(rgba: RGBA, x: number, y: number): IDendePart {
         const p = new DendePart();
         p.type = DendePartType.Filling;
         p.color = rgba;
@@ -29,19 +36,19 @@ class DendePart {
         return p;
     }
 
-    static clearBoard() {
+    static clearBoard(): IDendePart {
         const p = new DendePart();
         p.type = DendePartType.Clear;
         return p;
     }
 
-    static Undo() {
+    static Undo(): IDendePart {
         const p = new DendePart();
         p.type = DendePartType.Undo;
         return p;
     }
 
-    static Redo() {
+    static Redo(): IDendePart {
         const p = new DendePart();
         p.type = DendePartType.Redo;
         return p;
@@ -57,7 +64,10 @@ export default class Dende {
     private isDrawing: boolean = false;
     private mode: DendeMode = "drawing";
     private delay: number = 33;
-    private partListeners: Array<(p: DendePart) => any> = [];
+
+    // CHANGED: Listener now expects the Interface
+    private partListeners: Array<(p: IDendePart) => any> = [];
+
     private pointsBuffer: Array<number> = [];
     private lastSent: number = Date.now();
     private otherStartedDrawing: boolean = false;
@@ -80,17 +90,14 @@ export default class Dende {
 
         this.canvas.style.width = `${width}px`;
         this.canvas.style.height = `${height}px`;
-        
-        this.width = width;  
-        this.height = height; 
-        
-        this.mode = "drawing";
-        this.height = height;
+
         this.width = width;
+        this.height = height;
+
         this.mode = "drawing";
         this.undoStack = [];
         this.redoStack = [];
-        
+
         this.ctx = this.canvas.getContext("2d", { willReadFrequently: true })!;
         this.ctx.lineJoin = "round";
         this.ctx.lineCap = "round";
@@ -105,7 +112,8 @@ export default class Dende {
         this.canvas.style.cursor = "crosshair";
     }
 
-    public addPartListener(cb: (p: DendePart) => any) {
+    // CHANGED: Accepts Interface
+    public addPartListener(cb: (p: IDendePart) => any) {
         this.partListeners.push(cb);
     }
 
@@ -123,7 +131,7 @@ export default class Dende {
     }
 
     private attachEvents() {
-        const stopDrawing = (e: MouseEvent) => {
+        const stopDrawing = () => {
             if (!this.isDrawing) return;
             this.isDrawing = false;
             this.ctx.closePath();
@@ -148,7 +156,6 @@ export default class Dende {
                 this.saveSnapshot();
             } else if (this.mode == "drawing") {
                 this.isDrawing = true;
-
                 this.applyLocalSettings();
 
                 this.pointsBuffer.push(x, y);
@@ -217,14 +224,15 @@ export default class Dende {
     }
 
     private flushBuffer(isEnding: boolean) {
-        if (this.mode !== "drawing" || this.pointsBuffer.length === 0) return;
+        if (this.mode !== "drawing") return;
 
+        // We create a class instance here, but it matches the Interface perfectly
         const part = new DendePart();
         part.type = DendePartType.Drawing;
         part.isLineEnd = isEnding;
-        part.color = this.myColorRGBA; 
+        part.color = this.myColorRGBA;
         part.coordinates = [...this.pointsBuffer]
-        part.lineWidth = this.myLineWidth; 
+        part.lineWidth = this.myLineWidth;
 
         this.emitPart(part);
 
@@ -288,31 +296,42 @@ export default class Dende {
     public reset() {
         this._clear()
         this.ctx.closePath()
+        this.isDrawing = false
+        this.otherStartedDrawing = false;
+        this.mode = "drawing"
+        this.enableDrawing()
         this.undoStack = []
         this.redoStack = []
         this.saveSnapshot()
     }
 
-    emitPart(p: DendePart) {
+    // CHANGED: Accepts Interface
+    emitPart(p: IDendePart) {
         this.partListeners.forEach(cb => cb(p));
     }
 
-    public putPart(part: DendePart) {
+    // --- NETWORK HANDLER ---
+    // CHANGED: Accepts Interface (Crucial for WebSocket data)
+    public putPart(part: IDendePart) {
         if (this.canDraw) return;
+
         switch (part.type) {
             case DendePartType.Clear: {
+                this.redoStack = []
                 this.ctx.clearRect(0, 0, this.width, this.height);
                 this.saveSnapshot();
                 break;
             }
 
             case DendePartType.Filling: {
-                this._fillAtPoint(part.coordinates[0], part.coordinates[1], part.color);
+                this.redoStack = []
+                this._fillAtPoint(part.coordinates[0]!, part.coordinates[1]!, part.color);
                 this.saveSnapshot();
                 break;
             }
 
             case DendePartType.Drawing: {
+                this.redoStack = []
                 const [r, g, b, a] = part.color;
 
                 this.ctx.strokeStyle = `rgba(${r},${g},${b},${a})`;
@@ -323,19 +342,28 @@ export default class Dende {
                 if (!this.otherStartedDrawing) {
                     this.otherStartedDrawing = true;
                     this.ctx.beginPath();
-                    this.ctx.moveTo(part.coordinates[0], part.coordinates[1]);
-                }
-
-                if (part.coordinates.length >= 2) {
-                    for (let i = 2; i < part.coordinates.length; i += 2) {
-                        this.ctx.lineTo(part.coordinates[i], part.coordinates[i + 1]);
-                    }
+                    // Start at the first point
+                    this.ctx.moveTo(part.coordinates[0]!, part.coordinates[1]!);
+                    this.ctx.lineTo(part.coordinates[0]!, part.coordinates[1]!);
                     this.ctx.stroke();
+
+                    // Loop starts at 2 because 0 is handled by moveTo
+                    for (let i = 2; i < part.coordinates.length; i += 2) {
+                        this.ctx.lineTo(part.coordinates[i]!, part.coordinates[i + 1]!);
+                    }
+                } else {
+                    // If continuing a line, simply connect to ALL new points
+                    // Loop starts at 0
+                    for (let i = 0; i < part.coordinates.length; i += 2) {
+                        this.ctx.lineTo(part.coordinates[i]!, part.coordinates[i + 1]!);
+                    }
                 }
+                this.ctx.stroke();
 
                 if (part.isLineEnd) {
                     this.saveSnapshot();
                     this.otherStartedDrawing = false;
+                    this.ctx.stroke()
                 }
 
                 break;
@@ -353,7 +381,8 @@ export default class Dende {
         }
     }
 
-    onPartCreated(callback: (p: DendePart) => any) {
+    // CHANGED: Callback expects Interface
+    onPartCreated(callback: (p: IDendePart) => any) {
         this.partListeners.push(callback);
     }
 
@@ -373,20 +402,18 @@ export default class Dende {
         return this.height;
     }
 
-
-
     setDrawingMode(mode: DendeMode) {
         this.mode = mode;
     }
 
     setLineWidth(lineWidth: number) {
-        this.myLineWidth = lineWidth; 
+        this.myLineWidth = lineWidth;
         this.ctx.lineWidth = lineWidth;
     }
 
     setLineColorRGBA(r: number, g: number, b: number, a: number = 1) {
-        this.myColorRGBA = [r, g, b, a]; 
-        this.ctx.strokeStyle = `rgba(${r},${g},${b},${a})`; 
+        this.myColorRGBA = [r, g, b, a];
+        this.ctx.strokeStyle = `rgba(${r},${g},${b},${a})`;
     }
 
     setFPS(fps: number) {

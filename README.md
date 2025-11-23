@@ -59,22 +59,18 @@ dende.getHeight();
 
 ## DendePart – The Core Data Type
 
-Every drawing action is wrapped in a `DendePart` object, and the types are used as enum to reduce data sent over the network (sending 0 instead of "drawing"):
+Every drawing action is wrapped in a `DendePart` object that implements `IDendePart`, and the types are used as enum to reduce data sent over the network (sending 0 instead of "drawing"):
 
 ```typescript
 export enum DendePartType {
-    Drawing,  // Stroke with coordinates
-    Filling,  // Bucket fill at a point
-    Undo,     // Undo action
-    Redo,     // Redo action
-    Clear     // Clear canvas
+    Drawing, Filling, Undo, Redo, Clear
 }
 
-class DendePart {
+export interface IDendePart {
     type: DendePartType;
-    isLineEnd: boolean;           // True if this completes a stroke
-    coordinates: Array<number>;   // [x1, y1, x2, y2, ...] flattened
-    color: RGBA;                  // [r, g, b, a]
+    isLineEnd: boolean;
+    coordinates: Array<number>;
+    color: RGBA;
     lineWidth: number;
 }
 ```
