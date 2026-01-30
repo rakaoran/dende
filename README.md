@@ -4,7 +4,7 @@ It's a wrapper around the HTML5 Canvas made specifically for turn-based drawing 
 
 The main problem with raw canvas is that syncing it over a network is a pain. Sending an image every frame is heavy, and sending raw coordinates gets messy. Dende handles the state, the history (undo/redo), and serializes everything into tiny binary packets (Protobufs) that you can just fire over a socket.
 
-**Published on npm** as `@rakaoran/dende` so you can just `npm install` it and get going. No need to build from source unless you're making changes.
+**Published on npm** as `@rakaoran/dende` so you can just `npm install @rakaoran/dende` it and get going. No need to build from source unless you're making changes.
 
 ## How to Build
 
