@@ -1,3 +1,5 @@
+import { DendePart as ProtoDendePart, DendePart_PartType } from "./dende.js";
+
 export type DendeMode = "drawing" | "filling";
 export type RGBA = [number, number, number, number];
 
@@ -13,6 +15,10 @@ export interface IDendePart {
     lineWidth: number;
 }
 
+/**
+ * Represents a single action on the board (a line segment, a fill, a clear, etc).
+ * Mostly used internally to structure data before serialization.
+ */
 export class DendePart implements IDendePart {
     type: DendePartType;
     isLineEnd: boolean;
@@ -55,6 +61,10 @@ export class DendePart implements IDendePart {
     }
 }
 
+/**
+ * The main Dende engine.
+ * Handles the canvas DOM element, user interaction events, history stack, and Protocol Buffer serialization.
+ */
 export default class Dende {
     private canvas: HTMLCanvasElement;
     private width: number;
@@ -65,7 +75,7 @@ export default class Dende {
     private mode: DendeMode = "drawing";
     private delay: number = 33;
 
-    private partListeners: Array<(p: IDendePart) => any> = [];
+    private partListeners: Array<(p: Uint8Array) => any> = [];
 
     private pointsBuffer: Array<number> = [];
     private lastSent: number = Date.now();
@@ -80,6 +90,10 @@ export default class Dende {
 
     private canDraw: boolean = true;
 
+    /**
+     * @param width The logical width of the canvas in pixels.
+     * @param height The logical height of the canvas in pixels.
+     */
     constructor(width: number, height: number) {
         this.canvas = document.createElement("canvas")
         const dpr = window.devicePixelRatio || 1;
@@ -106,15 +120,28 @@ export default class Dende {
         this.attachEvents();
     }
 
+    /**
+     * Unlocks the canvas, allowing the user to draw or fill.
+     * Sets the cursor to 'crosshair'.
+     */
     public enableDrawing() {
         this.canDraw = true;
         this.canvas.style.cursor = "crosshair";
     }
 
-    public addPartListener(cb: (p: IDendePart) => any) {
+    /**
+     * Subscribes to drawing events.
+     * The callback receives a Uint8Array (serialized Protobuf) whenever the user performs an action.
+     * Broadcast this byte array to other clients to sync the drawing.
+     */
+    public addPartListener(cb: (p: Uint8Array) => any) {
         this.partListeners.push(cb);
     }
 
+    /**
+     * Locks the canvas so the user cannot interact with it.
+     * Useful when the user is in "view-only" mode.
+     */
     public disableDrawing() {
         if (this.isDrawing) {
             this.isDrawing = false;
@@ -185,6 +212,10 @@ export default class Dende {
         this.ctx.lineWidth = this.myLineWidth;
     }
 
+    /**
+     * Reverts the last action (drawing, filling, or clearing).
+     * Emits an Undo part so connected clients also undo.
+     */
     public undo() {
         this._undo()
         this.emitPart(DendePart.Undo())
@@ -204,6 +235,10 @@ export default class Dende {
         }
     }
 
+    /**
+     * Re-applies the last undone action.
+     * Emits a Redo part so connected clients also redo.
+     */
     public redo() {
         this._redo();
         this.emitPart(DendePart.Redo())
@@ -279,6 +314,10 @@ export default class Dende {
         this.ctx.putImageData(imageData, 0, 0);
     }
 
+    /**
+     * Wipes the entire canvas and resets the redo stack.
+     * Emits a Clear part.
+     */
     public clear() {
         this._clear();
         this.saveSnapshot();
@@ -290,6 +329,10 @@ export default class Dende {
         this.redoStack = [];
     }
 
+    /**
+     * Hard reset. Clears canvas, history stacks, and mode state.
+     * Does NOT emit a network event (local only).
+     */
     public reset() {
         this._clear()
         this.ctx.closePath()
@@ -302,31 +345,60 @@ export default class Dende {
         this.saveSnapshot()
     }
 
+    /**
+     * Converts an IDendePart object into Protobuf bytes and triggers the listener.
+     * Use this if you need to manually synthesize an event.
+     */
     emitPart(p: IDendePart) {
-        this.partListeners.forEach(cb => cb(p));
+        const protoMessage = {
+            type: p.type as number,
+            isLineEnd: p.isLineEnd,
+            coordinates: p.coordinates.map(c => Math.round(c)),
+            color: {
+                r: p.color[0],
+                g: p.color[1],
+                b: p.color[2],
+                a: p.color[3]
+            },
+            lineWidth: p.lineWidth
+        };
+
+        const bytes = ProtoDendePart.toBinary(protoMessage);
+        this.partListeners.forEach(cb => cb(bytes));
     }
 
-    public putPart(part: IDendePart) {
+    /**
+     * Deserializes raw bytes (Protobuf) and renders the result onto the canvas.
+     * Feed this method the data you receive from other clients/server.
+     * * @param bytes The binary data received from the network.
+     */
+    public putPart(bytes: Uint8Array) {
         if (this.canDraw) return;
 
+        const part = ProtoDendePart.fromBinary(bytes);
+        const colorData = part.color || { r: 0, g: 0, b: 0, a: 1 };
+        const rgba: RGBA = [colorData.r, colorData.g, colorData.b, colorData.a];
+
         switch (part.type) {
-            case DendePartType.Clear: {
+            case DendePart_PartType.CLEAR: {
                 this.redoStack = []
                 this.ctx.clearRect(0, 0, this.width, this.height);
                 this.saveSnapshot();
                 break;
             }
 
-            case DendePartType.Filling: {
+            case DendePart_PartType.FILLING: {
                 this.redoStack = []
-                this._fillAtPoint(part.coordinates[0]!, part.coordinates[1]!, part.color);
-                this.saveSnapshot();
+                if (part.coordinates.length >= 2) {
+                    this._fillAtPoint(part.coordinates[0], part.coordinates[1], rgba);
+                    this.saveSnapshot();
+                }
                 break;
             }
 
-            case DendePartType.Drawing: {
+            case DendePart_PartType.DRAWING: {
                 this.redoStack = []
-                const [r, g, b, a] = part.color;
+                const [r, g, b, a] = rgba;
 
                 this.ctx.strokeStyle = `rgba(${r},${g},${b},${a})`;
                 this.ctx.lineWidth = part.lineWidth;
@@ -336,16 +408,18 @@ export default class Dende {
                 if (!this.otherStartedDrawing) {
                     this.otherStartedDrawing = true;
                     this.ctx.beginPath();
-                    this.ctx.moveTo(part.coordinates[0]!, part.coordinates[1]!);
-                    this.ctx.lineTo(part.coordinates[0]!, part.coordinates[1]!);
-                    this.ctx.stroke();
+                    if (part.coordinates.length >= 2) {
+                        this.ctx.moveTo(part.coordinates[0], part.coordinates[1]);
+                        this.ctx.lineTo(part.coordinates[0], part.coordinates[1]);
+                        this.ctx.stroke();
 
-                    for (let i = 2; i < part.coordinates.length; i += 2) {
-                        this.ctx.lineTo(part.coordinates[i]!, part.coordinates[i + 1]!);
+                        for (let i = 2; i < part.coordinates.length; i += 2) {
+                            this.ctx.lineTo(part.coordinates[i], part.coordinates[i + 1]);
+                        }
                     }
                 } else {
                     for (let i = 0; i < part.coordinates.length; i += 2) {
-                        this.ctx.lineTo(part.coordinates[i]!, part.coordinates[i + 1]!);
+                        this.ctx.lineTo(part.coordinates[i], part.coordinates[i + 1]);
                     }
                 }
                 this.ctx.stroke();
@@ -359,19 +433,22 @@ export default class Dende {
                 break;
             }
 
-            case DendePartType.Redo: {
+            case DendePart_PartType.REDO: {
                 this._redo();
                 break;
             }
 
-            case DendePartType.Undo: {
+            case DendePart_PartType.UNDO: {
                 this._undo();
                 break;
             }
         }
     }
 
-    onPartCreated(callback: (p: IDendePart) => any) {
+    /**
+     * @deprecated Use `addPartListener` instead.
+     */
+    onPartCreated(callback: (p: Uint8Array) => any) {
         this.partListeners.push(callback);
     }
 
@@ -391,6 +468,9 @@ export default class Dende {
         return this.height;
     }
 
+    /**
+     * Switch between "drawing" (brush) and "filling" (bucket) modes.
+     */
     setDrawingMode(mode: DendeMode) {
         this.mode = mode;
     }
@@ -405,6 +485,11 @@ export default class Dende {
         this.ctx.strokeStyle = `rgba(${r},${g},${b},${a})`;
     }
 
+    /**
+     * Sets the throttle rate for mousemove events. 
+     * Lower FPS = less network traffic but choppier lines. 
+     * Default is ~30fps.
+     */
     setFPS(fps: number) {
         this.delay = Math.round(1000 / fps);
     }

@@ -1,103 +1,90 @@
-# Dende – A Canvas Wrapper for Turn-based Drawing Apps
+# Dende
 
-Dende is a lightweight TypeScript drawing package built for real-time turn-based (only one player draws at a time) drawing applications. It manages canvas state, handles local drawing interactions, and provides a clean event system for serializing and transmitting drawing actions over the network.
+It's a wrapper around the HTML5 Canvas made specifically for turn-based drawing games (think Gartic or Skribbl).
 
-## Key Features
+The main problem with raw canvas is that syncing it over a network is a pain. Sending an image every frame is heavy, and sending raw coordinates gets messy. Dende handles the state, the history (undo/redo), and serializes everything into tiny binary packets (Protobufs) that you can just fire over a socket.
 
-- **Dual-mode drawing**: Toggle between freehand drawing and bucket fill
-- **Local state preservation**: Your settings (color, line width) stay intact even when others draw
-- **Event-driven architecture**: Every action emits a serializable `DendePart` object
-- **Undo/Redo stacks**: Full history management with configurable depth
-- **Network-friendly**: No built-in networking, you get to choose how (json, protobuf... whatever suits you)
-- **Configurable performance**: Control update frequency via FPS settings
-- **High-DPI support**: Automatic scaling for Retina and high-density displays
+**Published on npm** as `@rakaoran/dende` so you can just `npm install` it and get going. No need to build from source unless you're making changes.
 
-## Main Methods
+## How to Build
 
-### Initialization
+If you're hacking on this or just cloned it, here's how to build the `dist` folder:
 
-```typescript
-const dende = new Dende(800, 600); // width, height
-document.body.appendChild(dende.getHTMLElement());
+```bash
+npm install
+npm run build
 ```
 
-### Drawing Control
+This uses `tsup` to compile the TypeScript and Protobuf stuff into ESM and CJS bundles in the `dist/` folder.
 
-| Method | Description |
-|--------|-------------|
-| `setDrawingMode(mode: "drawing" \| "filling")` | Switch between freehand and bucket fill |
-| `setLineColorRGBA(r, g, b, a)` | Set your brush color (0-255 or 0-1 for alpha) |
-| `setLineWidth(width: number)` | Set brush thickness |
-| `setFPS(fps: number)` | Control how often drawing updates are sent (default ~30 FPS) |
-| `enableDrawing()` | Allow local drawing input |
-| `disableDrawing()` | Block local drawing (use when waiting for opponent's turn) |
+## How it Actually Works
 
-### History
+You don't need to manually handle `mousedown` or `mousemove` events. Dende does that.
 
-| Method | Description |
-|--------|-------------|
-| `undo()` | Undo last action and emit it as a part |
-| `redo()` | Redo last undone action and emit it as a part |
-| `clear()` | Wipe the canvas and emit a clear part |
-| `reset()` | Hard reset: clear canvas, empty history stacks |
+1. **Local Drawing**: When you draw, Dende updates your canvas immediately so it feels responsive.
+2. **Serialization**: In the background, it batches your strokes into `DendePart` objects.
+3. **Broadcasting**: It fires an event with a `Uint8Array` (bytes). You send this byte array to other players however you want (WebSocket, WebRTC, whatever).
+4. **Remote Drawing**: When you receive bytes from someone else, you feed them into Dende, and it draws them exactly as they happened.
 
-### Events & Network
+## Quick Start
 
-| Method | Description |
-|--------|-------------|
-| `addPartListener(callback)` | Listen for drawing events (fired when user draws/fills/undos/clears) |
-| `putPart(part: DendePart)` | Apply a remote DendePart (e.g., from opponent's actions) |
-| `getHTMLElement()` | Get the underlying canvas element |
+### 1. Init
 
-### Accessors
+Create the instance and slap it into the DOM.
 
 ```typescript
-dende.getDrawingMode();  // "drawing" | "filling"
-dende.getWidth();
-dende.getHeight();
+import Dende from "@rakaoran/dende";
+
+// 800x600 canvas
+const board = new Dende(800, 600);
+document.body.appendChild(board.getHTMLElement());
+
+// Turn on drawing (cursor becomes a crosshair)
+board.enableDrawing();
 ```
 
-## DendePart – The Core Data Type
+### 2. Sending Data
 
-Every drawing action is wrapped in a `DendePart` object that implements `IDendePart`, and the types are used as enum to reduce data sent over the network (sending 0 instead of "drawing"):
+Listen for parts. This triggers whenever you draw a line, fill a bucket, clear the screen, or undo.
 
 ```typescript
-export enum DendePartType {
-    Drawing, Filling, Undo, Redo, Clear
-}
-
-export interface IDendePart {
-    type: DendePartType;
-    isLineEnd: boolean;
-    coordinates: Array<number>;
-    color: RGBA;
-    lineWidth: number;
-}
+board.addPartListener((bytes) => {
+    // 'bytes' is a Uint8Array. 
+    // Send this to your server/peers immediately.
+    socket.emit("draw_action", bytes);
+});
 ```
 
-## Usage Example: Turn-Based Drawing Game
+### 3. Receiving Data
 
-See the HTML and Js files attached, two canvases and one listens to the other.
+When data comes in from the network, just shove it into `putPart`.
 
-To generate the `dist/` file run: `tsc`.
+```typescript
+socket.on("draw_action", (data) => {
+    // Dende knows what to do with it.
+    board.putPart(new Uint8Array(data));
+});
+```
 
-## Why Dende Works Great for Turn-Based Drawing
+## Features
 
-**Separation of concerns**: Dende handles rendering and state. You handle networking. This means:
-- You can serialize `DendePart` objects however you want (JSON, binary, protobuf, etc.)
-- You control transport (WebSocket, HTTP, carrier pigeon)
-- You decide retry logic, compression, and conflict resolution
+- **It uses Protobufs**: The data is binary. It's way smaller than JSON.
+- **Undo/Redo**: It's built-in. `board.undo()` removes the last stroke locally and emits an undo packet so everyone else sees the undo happen too.
+- **Bucket Fill**: It has a flood fill algorithm (`board.setDrawingMode("filling")`).
+- **FPS Throttling**: By default, it sends updates at ~30 FPS (`delay: 33ms`) to save bandwidth. You can change this with `board.setFPS(60)`.
+- **Scaling**: It handles `devicePixelRatio` automatically, so lines won't look blurry on Retina screens.
 
-**Efficient updates**: Drawing strokes are batched and sent at configurable intervals (via `setFPS`). A stroke that takes 200ms to draw might only send 6–7 updates instead of 200, keeping bandwidth low.
+> Note: You can't both draw and receive drawing at the same time, you switch between the two modes (drawing and receiving) using `enableDrawing()` and `disableDrawing()`
 
-**Turn-based friendly**: Disable drawing with `disableDrawing()` while waiting. Remote actions come through `putPart()` without interfering with local state.
+## API Cheat Sheet
 
-**Local state isolation**: When your opponent draws in their color, it doesn't clobber your brush settings. The library preserves your `myColorRGBA` and `myLineWidth` separately from the shared canvas context.
-
-**Full history**: Undo/redo actions are also emitted as parts, so your opponent sees the exact same history state.
-
-## Tips
-
-- Use lower FPS for slower networks: `dende.setFPS(15)` instead of 30
-- Disable drawing when you want to listen to incoming data
-- The library handles high-DPI displays automatically
+| Method                         | What it does                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| `enableDrawing()`              | Unlocks the canvas for local drawing.                                           |
+| `disableDrawing()`             | Lock the canvas for drawing receiving only.                                     |
+| `setLineColorRGBA(r, g, b, a)` | Sets your brush color.                                                          |
+| `setLineWidth(px)`             | Sets brush size.                                                                |
+| `setDrawingMode("filling")`    | Switches to bucket tool.                                                        |
+| `undo()` / `redo()`            | Moves through history stack.                                                    |
+| `clear()`                      | Wipes everything.                                                               |
+| `reset()`                      | Local only. Hard reset (clears history & canvas) without telling other players. |

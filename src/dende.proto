@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package dende;
+
+// The main message wrapping a drawing action
+message DendePart {
+  enum PartType {
+    DRAWING = 0;
+    FILLING = 1;
+    UNDO = 2;
+    REDO = 3;
+    CLEAR = 4;
+  }
+
+  PartType type = 1;
+  bool is_line_end = 2;
+  repeated int32 coordinates = 3; // [x1, y1, x2, y2, ...]
+  Color color = 4;
+  float line_width = 5;
+}
+
+message Color {
+  int32 r = 1;
+  int32 g = 2;
+  int32 b = 3;
+  float a = 4;
+}
